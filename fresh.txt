@@ -1,0 +1,225 @@
+#!/usr/bin/env groovy
+
+// Pipeline
+pipeline {
+    agent {
+        node {
+            label "master"
+        }
+    }
+    options {
+        buildDiscarder(logRotator(numToKeepStr: '20', artifactNumToKeepStr: '20'))
+        timestamps()
+        skipStagesAfterUnstable()
+        disableConcurrentBuilds()
+    }
+    tools {nodejs "NodeJS 12.18.3"}
+    environment {
+        APP_NAME = 'GainUAE'
+        BUILD_ENVIRONMENT = 'UAT'
+        GIT_URL = 'https://github.com/Aatmesh/gainuae.git'
+        GIT_CREDENTIALS_ID = "aatmesh"
+        EMAIL_RECIPIENTS = "aatmesh.kedar@vernost.in"
+        REPLY_TO_RECIPIENTS = "aatmesh.kedar@vernost.in"
+        S3_BUCKET = "vms-ub-deploy/urbanbook/Intermiles-urbanbook"
+        S3_BUCKET_PATH = "s3://vms-ub-deploy/urbanbook/Intermiles-urbanbook/"
+        S3_REGION = "ap-south-1"
+        S3_FILE1 = "ubdist.zip"
+        S3_FILE2 = "Connector/Airlines-buisness/build/businessapp.js"
+        S3_FILE3 = "Connector/Airlines-Connector/build/connectorapp.js"
+        S3_FILE4 = "Connector/Airlines-Controller/build/wrapperapp.js"
+        S3_FILE5 = "Connector/Airlines-DAO/build/daoapp.js"
+        S3_ARCHIVE_FILE1 = "ubdist.zip"
+        S3_ARCHIVE_FILE2 = "businessapp.js"
+        S3_ARCHIVE_FILE3 = "connectorapp.js"
+        S3_ARCHIVE_FILE4 = "wrapperapp.js"
+        S3_ARCHIVE_FILE5 = "daoapp.js"
+        S3_PROFILE_NAME = "S3_Jenkins"
+        AWS_PROFILE_NAME = "vernost"
+        AWS_PROFILE_REGION = "ap-south-1"
+        AWS_AUTO_SCALE_GRP_NAME = "VMS-Intermiles-UAT-Urbanbook-Web-ASG"
+    }
+    parameters {
+        string(defaultValue: 'release/*', description: 'This parameter is used to identify the branch on which the build is created', name: 'BranchName', trim: true)
+    }
+    stages {
+        stage('Cleanup Workspace') {
+            steps {
+                echo "Cleaning Up Workspace for Project"
+                cleanWS()
+                echo "Cleaned Up Workspace for Project"
+            }
+            post {
+                failure {
+                    sendFailureEmail(STAGE_NAME)
+                }
+            }
+        }
+        
+        stage('Checkout') {
+            steps {
+                checkout([$class: 'GitSCM',
+                branches: [[name: "${params.BranchName}"]],
+                doGenerateSubmoduleConfigurations: false,
+                extensions: [[$class: 'CheckoutOption', timeout: 20]],
+                submoduleCfg: [],
+                userRemoteConfigs: [[
+                   credentialsId: env.GIT_CREDENTIALS_ID, url: env.GIT_URL
+                ]]])
+           }
+        }
+        
+        stage('Installing Dependencies') {  
+            steps {
+                echo 'Installing Dependencies Started'
+                nodejs(nodeJSInstallationName: 'NodeJS 12.18.3') {
+                    installFEDependencies()
+                    installBEDependencies()
+                }
+                echo 'Installing Dependencies Completed'
+            }
+             post {
+                failure {
+                    sendFailureEmail(STAGE_NAME)
+                }
+            }
+        }
+        
+        stage('Unit Testing') {
+            steps {
+                unitTesting()
+            }
+             post {
+                failure {
+                    sendFailureEmail(STAGE_NAME)
+                }
+            }
+        }
+        
+        stage('Build') {
+            steps {
+                echo 'Build Started'
+                createFEBuild()
+                createBEBuild()
+                echo 'Build Completed'
+            }
+             post {
+                failure {
+                    sendFailureEmail(STAGE_NAME)
+                }
+            }
+        }
+        
+        stage('Static Code Analysis') {
+            steps {
+                staticCodeAnalysis()
+            }
+             post {
+                failure {
+                    sendFailureEmail(STAGE_NAME)
+                }
+            }
+        }
+        
+        stage('Static Scan') {
+            steps {
+                staticScan()
+            }
+             post {
+                failure {
+                    sendFailureEmail(STAGE_NAME)
+                }
+            }
+        }
+        
+        stage('Dynamic Scan') {
+            steps {
+                dynamicScan()
+            }
+             post {
+                failure {
+                    sendFailureEmail(STAGE_NAME)
+                }
+            }
+        }
+        
+        stage('Trigger Automation') {
+            steps {
+                automationTest()
+            }
+             post {
+                failure {
+                    sendFailureEmail(STAGE_NAME)
+                }
+            }
+        }
+        
+        stage('Orchestration') {
+            steps {
+                orchestration()
+            }
+             post {
+                failure {
+                    sendFailureEmail(STAGE_NAME)
+                }
+            }
+        }
+        
+        stage('Upload to S3 Bucket') {
+            when {
+                //expression { return false; }
+                expression { return isValid(); }
+            }
+            steps {
+                echo 'Upload Started'
+                uploadArtifacts()
+                echo 'Upload Completed'
+            }
+             post {
+                failure {
+                    sendFailureEmail(STAGE_NAME)
+                }
+            }
+        }
+        
+        stage('Auto Deployment') {
+            when {
+                //expression { return false; }
+                expression { return isValid(); }
+            }
+            steps {
+                echo 'Deployment Started'
+                autoDeployment()
+                echo 'Deployment Completed'
+            }
+             post {
+                failure {
+                    sendFailureEmail(STAGE_NAME)
+                }
+            }
+        }
+
+        stage('Cache') {
+            when {
+                //expression { return false; }
+                expression { return isValid(); }
+            }
+            steps {
+                echo 'Cache Purge Started'
+                autoAkamaiPurge()
+                echo 'Purge Completed'
+            }
+             post {
+                failure {
+                    sendFailureEmail(STAGE_NAME)
+                }
+            }
+        }
+    }
+    post {
+        success {
+            sendSuccessEmail()
+        }
+    }
+}
+    
